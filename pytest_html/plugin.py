@@ -30,6 +30,11 @@ from . import extras
 from . import __version__, __pypi_url__
 
 
+
+
+
+
+
 def pytest_addhooks(pluginmanager):
     from . import hooks
 
@@ -104,7 +109,8 @@ class HTMLReport:
 
     class TestResult:
         def __init__(self, outcome, report, logfile, config):
-            self.test_id = report.nodeid.encode("utf-8").decode("unicode_escape")
+            # self.test_id = report.nodeid.encode("utf-8").decode("unicode_escape")
+            self.test_id = report.nodeid
             if getattr(report, "when", "call") != "call":
                 self.test_id = "::".join([report.nodeid, report.when])
             self.time = getattr(report, "duration", 0.0)
@@ -181,7 +187,33 @@ class HTMLReport:
         def append_extra_html(self, extra, extra_index, test_index):
             href = None
             if extra.get("format") == extras.FORMAT_IMAGE:
-                self._append_image(extra, extra_index, test_index)
+                content = extra.get("content")
+                try:
+                    is_uri_or_path = content.startswith(("file", "http")) or isfile(
+                        content
+                    )
+                except ValueError:
+                    # On Windows, os.path.isfile throws this exception when
+                    # passed a b64 encoded image.
+                    is_uri_or_path = False
+                if is_uri_or_path:
+                    if self.self_contained:
+                        warnings.warn(
+                            "Self-contained HTML report "
+                            "includes link to external "
+                            "resource: {}".format(content)
+                        )
+                    html_div = html.a(html.img(src=content), href=content)
+                elif self.self_contained:
+                    src = "data:{};base64,{}".format(extra.get("mime_type"), content)
+                    html_div = html.img(src=src)
+                else:
+                    content = b64decode(content.encode("utf-8"))
+                    href = src = self.create_asset(
+                        content, extra_index, test_index, extra.get("extension"), "wb"
+                    )
+                    html_div = html.a(html.img(src=src), href=href)
+                self.additional_html.append(html.div(html_div, class_="image"))
 
             elif extra.get("format") == extras.FORMAT_HTML:
                 self.additional_html.append(html.div(raw(extra.get("content"))))
@@ -208,9 +240,6 @@ class HTMLReport:
 
             elif extra.get("format") == extras.FORMAT_URL:
                 href = extra.get("content")
-
-            elif extra.get("format") == extras.FORMAT_VIDEO:
-                self._append_video(extra, extra_index, test_index)
 
             if href is not None:
                 self.links_html.append(
@@ -252,52 +281,6 @@ class HTMLReport:
                 log = html.div(class_="empty log")
                 log.append("No log output captured.")
             additional_html.append(log)
-
-        def _make_media_html_div(
-            self, extra, extra_index, test_index, base_extra_string, base_extra_class
-        ):
-            content = extra.get("content")
-            try:
-                is_uri_or_path = content.startswith(("file", "http")) or isfile(content)
-            except ValueError:
-                # On Windows, os.path.isfile throws this exception when
-                # passed a b64 encoded image.
-                is_uri_or_path = False
-            if is_uri_or_path:
-                if self.self_contained:
-                    warnings.warn(
-                        "Self-contained HTML report "
-                        "includes link to external "
-                        f"resource: {content}"
-                    )
-
-                html_div = html.a(
-                    raw(base_extra_string.format(extra.get("content"))), href=content
-                )
-            elif self.self_contained:
-                src = f"data:{extra.get('mime_type')};base64,{content}"
-                html_div = raw(base_extra_string.format(src))
-            else:
-                content = b64decode(content.encode("utf-8"))
-                href = src = self.create_asset(
-                    content, extra_index, test_index, extra.get("extension"), "wb"
-                )
-                html_div = html.a(class_=base_extra_class, target="_blank", href=href)
-            return html_div
-
-        def _append_image(self, extra, extra_index, test_index):
-            image_base = '<img src="{}"/>'
-            html_div = self._make_media_html_div(
-                extra, extra_index, test_index, image_base, "image"
-            )
-            self.additional_html.append(html.div(html_div, class_="image"))
-
-        def _append_video(self, extra, extra_index, test_index):
-            video_base = '<video controls><source src="{}" type="video/mp4"></video>'
-            html_div = self._make_media_html_div(
-                extra, extra_index, test_index, video_base, "video"
-            )
-            self.additional_html.append(html.div(html_div, class_="video"))
 
     def _appendrow(self, outcome, report):
         result = self.TestResult(outcome, report, self.logfile, self.config)
@@ -381,7 +364,10 @@ class HTMLReport:
             html_css = html.style(raw(self.style_css))
 
         head = html.head(
-            html.meta(charset="utf-8"), html.title("Test Report"), html_css
+            html.meta(charset="utf-8"),
+            html.meta(content="width=device-width, initial-scale=1.0, minimum-scale=0.5, maximum-scale=2.0, user-scalable=no"),
+            html.title("Test Report"),
+            html_css
         )
 
         class Outcome:
@@ -480,15 +466,17 @@ class HTMLReport:
             __name__, os.path.join("resources", "main.js")
         ).decode("utf-8")
 
+        report_title = self.logfile.split('/')[-4] + '测试报告如下：'
         body = html.body(
             html.script(raw(main_js)),
-            html.h1(os.path.basename(self.logfile)),
+            # html.h1(os.path.basename(self.logfile)),
+            html.h1(report_title),  # 测试报告title
             html.p(
-                "Report generated on {} at {} by ".format(
-                    generated.strftime("%d-%b-%Y"), generated.strftime("%H:%M:%S")
+                "Report generated on {} at {}.".format(
+                    generated.strftime("%Y-%m-%d"), generated.strftime("%H:%M:%S")
                 ),
-                html.a("pytest-html", href=__pypi_url__),
-                f" v{__version__}",
+                # html.a("pytest-html", href=__pypi_url__),
+                # f" v{__version__}",
             ),
             onLoad="init()",
         )
@@ -516,6 +504,10 @@ class HTMLReport:
             return []
 
         metadata = config._metadata
+        if 'Capabilities' in metadata:
+            metadata.pop('Capabilities')
+        if 'Base URL' in config._metadata:
+            metadata.pop('Base URL')
         environment = [html.h2("Environment")]
         rows = []
 
@@ -528,12 +520,8 @@ class HTMLReport:
             if isinstance(value, str) and value.startswith("http"):
                 value = html.a(value, href=value, target="_blank")
             elif isinstance(value, (list, tuple, set)):
-                value = ", ".join(str(i) for i in sorted(map(str, value)))
-            elif isinstance(value, dict):
-                sorted_dict = {k: value[k] for k in sorted(value)}
-                value = json.dumps(sorted_dict)
-            raw_value_string = raw(str(value))
-            rows.append(html.tr(html.td(key), html.td(raw_value_string)))
+                value = ", ".join(str(i) for i in value)
+            rows.append(html.tr(html.td(key), html.td(value)))
 
         environment.append(html.table(rows, id="environment"))
         return environment
