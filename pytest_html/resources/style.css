@@ -17,7 +17,9 @@ h2 {
 }
 
 p {
-    color: yellow;
+	color: black;
+	font-size: 13px;
+
 }
 
 a {
